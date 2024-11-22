@@ -37,11 +37,15 @@ mod codec;
 mod command;
 pub mod config;
 mod connection_manager;
+#[cfg(feature = "crypto")]
+mod crypto;
 mod cursor;
 pub mod packet_pool;
 mod pdu;
 #[cfg(feature = "peripheral")]
 pub mod peripheral;
+#[cfg(feature = "crypto")]
+mod security_manager;
 pub mod types;
 
 #[cfg(feature = "peripheral")]
@@ -126,6 +130,14 @@ impl Address {
             addr: BdAddr::new(val),
         }
     }
+
+    /// To bytes
+    pub fn to_bytes(&self) -> [u8; 7] {
+        let mut bytes = [0; 7];
+        bytes[0] = self.kind.into_inner();
+        bytes[1..].copy_from_slice(&self.addr.into_inner());
+        bytes
+    }
 }
 
 /// Errors returned by the host.
@@ -148,6 +160,9 @@ pub enum Error {
     HciDecode(FromHciBytesError),
     /// Error from the Attribute Protocol.
     Att(AttErrorCode),
+    #[cfg(feature = "crypto")]
+    /// Error from the security manager
+    Security(crate::security_manager::SecurityManagerError),
     /// Insufficient space in the buffer.
     InsufficientSpace,
     /// Invalid value.
