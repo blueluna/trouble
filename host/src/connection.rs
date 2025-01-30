@@ -5,6 +5,7 @@ use bt_hci::cmd::status::ReadRssi;
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::{AddrKind, BdAddr, ConnHandle, DisconnectReason, LeConnRole, Status};
 use embassy_time::Duration;
+use rand_core::{CryptoRng, RngCore};
 
 use crate::connection_manager::ConnectionManager;
 use crate::pdu::Pdu;
@@ -235,9 +236,10 @@ impl<'stack> Connection<'stack> {
     }
 
     /// The RSSI value for this connection.
-    pub async fn rssi<T>(&self, stack: &Stack<'_, T>) -> Result<i8, BleHostError<T::Error>>
+    pub async fn rssi<T, R>(&self, stack: &Stack<'_, T, R>) -> Result<i8, BleHostError<T::Error>>
     where
         T: ControllerCmdSync<ReadRssi>,
+        R: RngCore + CryptoRng,
     {
         let handle = self.handle();
         let ret = stack.host.command(ReadRssi::new(handle)).await?;
@@ -245,13 +247,14 @@ impl<'stack> Connection<'stack> {
     }
 
     /// Update connection parameters for this connection.
-    pub async fn update_connection_params<T>(
+    pub async fn update_connection_params<T, R>(
         &self,
-        stack: &Stack<'_, T>,
+        stack: &Stack<'_, T, R>,
         params: ConnectParams,
     ) -> Result<(), BleHostError<T::Error>>
     where
         T: ControllerCmdAsync<LeConnUpdate>,
+        R: RngCore + CryptoRng,
     {
         let handle = self.handle();
         match stack

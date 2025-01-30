@@ -1285,9 +1285,11 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embedded-io",
+ "embedded-io-async",
  "futures",
  "heapless",
  "log",
+ "rand_core",
  "static_cell",
  "trouble-host-macros",
 ]

@@ -13,6 +13,7 @@ use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::channel::{Channel, DynamicReceiver};
 use embassy_sync::pubsub::{self, PubSubChannel, WaitResult};
 use heapless::Vec;
+use rand_core::{CryptoRng, RngCore};
 
 use crate::att::{self, AttReq, AttRsp, ATT_HANDLE_VALUE_NTF};
 use crate::attribute::{AttributeData, Characteristic, CharacteristicProp, Uuid, CCCD};
@@ -319,10 +320,16 @@ const MAX_NOTIF: usize = config::GATT_CLIENT_NOTIFICATION_MAX_SUBSCRIBERS;
 const NOTIF_QSIZE: usize = config::GATT_CLIENT_NOTIFICATION_QUEUE_SIZE;
 
 /// A GATT client capable of using the GATT protocol.
-pub struct GattClient<'reference, T: Controller, const MAX_SERVICES: usize, const L2CAP_MTU: usize = 27> {
+pub struct GattClient<
+    'reference,
+    T: Controller,
+    R: RngCore + CryptoRng,
+    const MAX_SERVICES: usize,
+    const L2CAP_MTU: usize = 27,
+> {
     known_services: RefCell<Vec<ServiceHandle, MAX_SERVICES>>,
     rx: DynamicReceiver<'reference, (ConnHandle, Pdu)>,
-    stack: &'reference Stack<'reference, T>,
+    stack: &'reference Stack<'reference, T, R>,
     connection: Connection<'reference>,
     response_channel: Channel<NoopRawMutex, (ConnHandle, Pdu), 1>,
 
@@ -359,8 +366,8 @@ pub(crate) trait Client<'d, E> {
     fn request(&self, req: AttReq<'_>) -> impl Future<Output = Result<Pdu, BleHostError<E>>>;
 }
 
-impl<'reference, T: Controller, const MAX_SERVICES: usize, const L2CAP_MTU: usize> Client<'reference, T::Error>
-    for GattClient<'reference, T, MAX_SERVICES, L2CAP_MTU>
+impl<'reference, T: Controller, R: RngCore + CryptoRng, const MAX_SERVICES: usize, const L2CAP_MTU: usize>
+    Client<'reference, T::Error> for GattClient<'reference, T, R, MAX_SERVICES, L2CAP_MTU>
 {
     async fn request(&self, req: AttReq<'_>) -> Result<Pdu, BleHostError<T::Error>> {
         let header = L2capHeader {
@@ -383,14 +390,14 @@ impl<'reference, T: Controller, const MAX_SERVICES: usize, const L2CAP_MTU: usiz
     }
 }
 
-impl<'reference, C: Controller, const MAX_SERVICES: usize, const L2CAP_MTU: usize>
-    GattClient<'reference, C, MAX_SERVICES, L2CAP_MTU>
+impl<'reference, C: Controller, R: RngCore + CryptoRng, const MAX_SERVICES: usize, const L2CAP_MTU: usize>
+    GattClient<'reference, C, R, MAX_SERVICES, L2CAP_MTU>
 {
     /// Creates a GATT client capable of processing the GATT protocol using the provided table of attributes.
     pub async fn new(
-        stack: &'reference Stack<'reference, C>,
+        stack: &'reference Stack<'reference, C, R>,
         connection: &Connection<'reference>,
-    ) -> Result<GattClient<'reference, C, MAX_SERVICES, L2CAP_MTU>, BleHostError<C::Error>> {
+    ) -> Result<GattClient<'reference, C, R, MAX_SERVICES, L2CAP_MTU>, BleHostError<C::Error>> {
         let l2cap = L2capHeader { channel: 4, length: 3 };
         let mut buf = [0; 7];
         let mut w = WriteCursor::new(&mut buf);

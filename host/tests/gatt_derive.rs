@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use tokio::select;
+use rand_chacha;
+use rand_core::{SeedableRng};
 use trouble_host::prelude::*;
 
 mod common;
@@ -60,6 +62,9 @@ struct BatteryService {
 async fn gatt_client_server() {
     let _ = env_logger::try_init();
     let adapters = common::find_controllers();
+    if adapters.len() == 0 {
+        return ();
+    }
     let peripheral = adapters[0].clone();
     let central = adapters[1].clone();
 
@@ -74,8 +79,17 @@ async fn gatt_client_server() {
         let controller_peripheral = common::create_controller(&peripheral).await;
 
         let mut resources: HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 27> = HostResources::new();
-        let stack = trouble_host::new(controller_peripheral, &mut resources)
-            .set_random_address(peripheral_address);
+
+        let mut rng = rand_chacha::ChaCha12Rng::from_seed(Default::default());
+
+        #[cfg(not(feature = "crypto"))]
+        let builder = trouble_host::new(controller_peripheral, &mut resources);
+        #[cfg(feature = "crypto")]
+        let builder = {
+            trouble_host::new(controller_peripheral, &mut resources, &mut rng)
+        };
+        
+        let stack = builder.set_random_address(peripheral_address);
         let Host {
             mut peripheral,
             mut runner,
@@ -163,7 +177,12 @@ async fn gatt_client_server() {
     let central = local.spawn_local(async move {
         let controller_central = common::create_controller(&central).await;
         let mut resources: HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 27> = HostResources::new();
+        let mut rng = rand_chacha::ChaCha12Rng::from_seed(Default::default());
+        #[cfg(not(feature = "crypto"))]
         let stack = trouble_host::new(controller_central, &mut resources);
+        #[cfg(feature = "crypto")]
+        let stack = 
+            trouble_host::new(controller_central, &mut resources, &mut rng);
         let Host {
             mut central,
             mut runner,
@@ -190,7 +209,7 @@ async fn gatt_client_server() {
                 tokio::time::sleep(Duration::from_secs(5)).await;
 
                 println!("[central] creating gatt client");
-                let client = GattClient::<common::Controller, 10, 27>::new(&stack, &conn).await.unwrap();
+                let client = GattClient::<common::Controller, _, 10, 27>::new(&stack, &conn).await.unwrap();
 
                 select! {
                     r = async {

@@ -7,18 +7,19 @@ use bt_hci::cmd::le::{
 use bt_hci::controller::{Controller, ControllerCmdSync};
 use bt_hci::param::{AddrKind, AdvChannelMap, AdvHandle, AdvKind, AdvSet, BdAddr, LeConnRole, Operation};
 use embassy_futures::select::{select, Either};
+use rand_core::{CryptoRng, RngCore};
 
 use crate::advertise::{Advertisement, AdvertisementParameters, AdvertisementSet, RawAdvertisement};
 use crate::connection::Connection;
 use crate::{Address, BleHostError, Error, Stack};
 
 /// Type which implements the BLE peripheral role.
-pub struct Peripheral<'d, C> {
-    stack: &'d Stack<'d, C>,
+pub struct Peripheral<'d, C, R> {
+    stack: &'d Stack<'d, C, R>,
 }
 
-impl<'d, C: Controller> Peripheral<'d, C> {
-    pub(crate) fn new(stack: &'d Stack<'d, C>) -> Self {
+impl<'d, C: Controller, R: RngCore + CryptoRng> Peripheral<'d, C, R> {
+    pub(crate) fn new(stack: &'d Stack<'d, C, R>) -> Self {
         Self { stack }
     }
 
@@ -27,7 +28,7 @@ impl<'d, C: Controller> Peripheral<'d, C> {
         &mut self,
         params: &AdvertisementParameters,
         data: Advertisement<'k>,
-    ) -> Result<Advertiser<'d, C>, BleHostError<C::Error>>
+    ) -> Result<Advertiser<'d, C, R>, BleHostError<C::Error>>
     where
         C: for<'t> ControllerCmdSync<LeSetAdvData>
             + ControllerCmdSync<LeSetAdvParams>
@@ -117,7 +118,7 @@ impl<'d, C: Controller> Peripheral<'d, C> {
         &mut self,
         sets: &[AdvertisementSet<'k>],
         handles: &mut [AdvSet],
-    ) -> Result<Advertiser<'d, C>, BleHostError<C::Error>>
+    ) -> Result<Advertiser<'d, C, R>, BleHostError<C::Error>>
     where
         C: for<'t> ControllerCmdSync<LeSetExtAdvData<'t>>
             + ControllerCmdSync<LeClearAdvSets>
@@ -218,13 +219,13 @@ impl<'d, C: Controller> Peripheral<'d, C> {
 }
 
 /// Handle to an active advertiser which can accept connections.
-pub struct Advertiser<'d, C: Controller> {
-    stack: &'d Stack<'d, C>,
+pub struct Advertiser<'d, C: Controller, R: RngCore + CryptoRng> {
+    stack: &'d Stack<'d, C, R>,
     extended: bool,
     done: bool,
 }
 
-impl<'d, C: Controller> Advertiser<'d, C> {
+impl<'d, C: Controller, R: RngCore + CryptoRng> Advertiser<'d, C, R> {
     /// Accept the next peripheral connection for this advertiser.
     ///
     /// Returns Error::Timeout if advertiser stopped.
@@ -243,7 +244,7 @@ impl<'d, C: Controller> Advertiser<'d, C> {
     }
 }
 
-impl<C: Controller> Drop for Advertiser<'_, C> {
+impl<C: Controller, R: RngCore + CryptoRng> Drop for Advertiser<'_, C, R> {
     fn drop(&mut self) {
         if !self.done {
             self.stack.host.advertise_command_state.cancel(self.extended);

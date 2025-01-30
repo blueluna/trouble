@@ -21,7 +21,13 @@ where
 
     info!("Our address = {:?}", address);
     let mut resources: HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU> = HostResources::new();
-    let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
+    #[cfg(feature = "crypto")]
+    let mut rng = rand_chacha::ChaCha12Rng::from_seed(Default::default());
+    #[cfg(not(feature = "crypto"))]
+    let builder = trouble_host::new(controller, &mut resources);
+    #[cfg(feature = "crypto")]
+    let builder = { trouble_host::new(controller, &mut resources, &mut rng) };
+    let stack = builder.set_random_address(address);
     let Host {
         central, mut runner, ..
     } = stack.build();

@@ -38,7 +38,13 @@ where
     info!("Our address = {:?}", address);
 
     let mut resources: HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, L2CAP_MTU> = HostResources::new();
-    let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
+    #[cfg(feature = "crypto")]
+    let mut rng = rand_chacha::ChaCha12Rng::from_seed(Default::default());
+    #[cfg(not(feature = "crypto"))]
+    let builder = trouble_host::new(controller, &mut resources);
+    #[cfg(feature = "crypto")]
+    let builder = { trouble_host::new(controller, &mut resources, &mut rng) };
+    let stack = builder.set_random_address(address);
     let Host {
         mut peripheral, runner, ..
     } = stack.build();
@@ -87,7 +93,7 @@ where
 ///
 /// spawner.must_spawn(ble_task(runner));
 /// ```
-async fn ble_task<C: Controller>(mut runner: Runner<'_, C>) {
+async fn ble_task<C: Controller>(mut runner: Runner<'_, C, R>) {
     loop {
         if let Err(e) = runner.run().await {
             #[cfg(feature = "defmt")]

@@ -8,6 +8,7 @@ use bt_hci::FromHciBytes;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::waitqueue::WakerRegistration;
+use rand_core::{CryptoRng, RngCore};
 
 use crate::cursor::WriteCursor;
 use crate::host::{AclSender, BleHost};
@@ -157,14 +158,14 @@ impl<'d> ChannelManager<'d> {
         Err(Error::NoChannelAvailable)
     }
 
-    pub(crate) async fn accept<T: Controller>(
+    pub(crate) async fn accept<T: Controller, R: RngCore + CryptoRng>(
         &self,
         conn: ConnHandle,
         psm: &[u16],
         mtu: u16,
         credit_flow: CreditFlowPolicy,
         initial_credits: Option<u16>,
-        ble: &BleHost<'_, T>,
+        ble: &BleHost<'_, T, R>,
     ) -> Result<L2capChannel<'_>, BleHostError<T::Error>> {
         // Wait until we find a channel for our connection in the connecting state matching our PSM.
         let (channel, req_id, mps, mtu, cid, credits) = poll_fn(|cx| {
@@ -220,14 +221,14 @@ impl<'d> ChannelManager<'d> {
         Ok(channel)
     }
 
-    pub(crate) async fn create<T: Controller>(
+    pub(crate) async fn create<T: Controller, R: RngCore + CryptoRng>(
         &self,
         conn: ConnHandle,
         psm: u16,
         mtu: u16,
         credit_flow: CreditFlowPolicy,
         initial_credits: Option<u16>,
-        ble: &BleHost<'_, T>,
+        ble: &BleHost<'_, T, R>,
     ) -> Result<L2capChannel<'_>, BleHostError<T::Error>> {
         let req_id = self.next_request_id();
         let mut credits = 0;
@@ -261,11 +262,11 @@ impl<'d> ChannelManager<'d> {
         poll_fn(|cx| self.poll_created(conn, idx, ble, Some(cx))).await
     }
 
-    fn poll_created<T: Controller>(
+    fn poll_created<T: Controller, R: RngCore + CryptoRng>(
         &self,
         conn: ConnHandle,
         idx: ChannelIndex,
-        ble: &BleHost<'_, T>,
+        ble: &BleHost<'_, T, R>,
         cx: Option<&mut Context<'_>>,
     ) -> Poll<Result<L2capChannel<'_>, BleHostError<T::Error>>> {
         let mut state = self.state.borrow_mut();
@@ -488,11 +489,11 @@ impl<'d> ChannelManager<'d> {
     /// Receive data on a given channel and copy it into the buffer.
     ///
     /// The length provided buffer slice must be equal or greater to the agreed MTU.
-    pub(crate) async fn receive<T: Controller>(
+    pub(crate) async fn receive<T: Controller, R: RngCore + CryptoRng>(
         &self,
         chan: ChannelIndex,
         buf: &mut [u8],
-        ble: &BleHost<'d, T>,
+        ble: &BleHost<'d, T, R>,
     ) -> Result<usize, BleHostError<T::Error>> {
         let packet = self.receive_pdu(chan).await?;
 
@@ -534,12 +535,12 @@ impl<'d> ChannelManager<'d> {
     /// The buffer will be segmented to the maximum payload size agreed in the opening handshake.
     ///
     /// If the channel has been closed or the channel id is not valid, an error is returned.
-    pub(crate) async fn send<T: Controller>(
+    pub(crate) async fn send<T: Controller, R: RngCore + CryptoRng>(
         &self,
         index: ChannelIndex,
         buf: &[u8],
         p_buf: &mut [u8],
-        ble: &BleHost<'d, T>,
+        ble: &BleHost<'d, T, R>,
     ) -> Result<(), BleHostError<T::Error>> {
         let (conn, mps, peer_cid) = self.connected_channel_params(index)?;
         // The number of packets we'll need to send for this payload
@@ -570,12 +571,12 @@ impl<'d> ChannelManager<'d> {
     /// The buffer will be segmented to the maximum payload size agreed in the opening handshake.
     ///
     /// If the channel has been closed or the channel id is not valid, an error is returned.
-    pub(crate) fn try_send<T: Controller + blocking::Controller>(
+    pub(crate) fn try_send<T: Controller + blocking::Controller, R: RngCore + CryptoRng>(
         &self,
         index: ChannelIndex,
         buf: &[u8],
         p_buf: &mut [u8],
-        ble: &BleHost<'d, T>,
+        ble: &BleHost<'d, T, R>,
     ) -> Result<(), BleHostError<T::Error>> {
         let (conn, mps, peer_cid) = self.connected_channel_params(index)?;
 
@@ -621,10 +622,10 @@ impl<'d> ChannelManager<'d> {
 
     // Check the current state of flow control and send flow indications if
     // our policy says so.
-    async fn flow_control<T: Controller>(
+    async fn flow_control<T: Controller, R: RngCore + CryptoRng>(
         &self,
         index: ChannelIndex,
-        ble: &BleHost<'d, T>,
+        ble: &BleHost<'d, T, R>,
         mut packet: Packet,
     ) -> Result<(), BleHostError<T::Error>> {
         let (conn, cid, credits) = self.with_mut(|state| {
@@ -1007,6 +1008,8 @@ mod tests {
     extern crate std;
 
     use bt_hci::param::{AddrKind, BdAddr, LeConnRole, Status};
+    use rand_chacha;
+    use rand_core::SeedableRng;
 
     use super::*;
     use crate::mock_controller::MockController;
@@ -1016,8 +1019,12 @@ mod tests {
     fn channel_refcount() {
         let mut resources: HostResources<2, 2, 27> = HostResources::new();
         let ble = MockController::new();
+        let mut rng = rand_chacha::ChaCha12Rng::from_seed(Default::default());
 
+        #[cfg(not(feature = "crypto"))]
         let builder = crate::new(ble, &mut resources);
+        #[cfg(feature = "crypto")]
+        let builder = crate::new(ble, &mut resources, &mut rng);
         let ble = builder.host;
 
         let conn = ConnHandle::new(33);

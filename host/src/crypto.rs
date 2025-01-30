@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 // This file contains code from Blackrock User-Mode Bluetooth LE Library (https://github.com/mxk/burble)
 
 use cmac::digest;
@@ -279,24 +280,6 @@ impl PublicKey {
             && y[16..] == u128::to_be_bytes(0x766345c2_8fed3024_741c8ed0_1589d28b)
     }
 }
-
-// impl Codec for PublicKey {
-//     #[inline]
-//     fn pack(&self, p: &mut Packer) {
-//         let (mut x, mut y) = (self.x.0 .0, self.y.0);
-//         x.reverse();
-//         y.reverse();
-//         p.put(x).put(y);
-//     }
-
-//     #[inline]
-//     fn unpack(p: &mut Unpacker) -> Option<Self> {
-//         let (mut x, mut y) = (PublicKeyX(Coord(p.bytes())), Coord(p.bytes()));
-//         x.0 .0.reverse();
-//         y.0.reverse();
-//         Some(Self { x, y })
-//     }
-// }
 
 /// 256-bit elliptic curve coordinate in big-endian byte order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

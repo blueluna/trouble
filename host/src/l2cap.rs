@@ -1,5 +1,6 @@
 //! L2CAP channels.
 use bt_hci::controller::{blocking, Controller};
+use rand_core::{CryptoRng, RngCore};
 
 pub use crate::channel_manager::CreditFlowPolicy;
 use crate::channel_manager::{ChannelIndex, DynamicChannelManager};
@@ -71,9 +72,9 @@ impl<'d> L2capChannel<'d> {
     ///
     /// If the channel has been closed or the channel id is not valid, an error is returned.
     /// If there are no available credits to send, waits until more credits are available.
-    pub async fn send<T: Controller, const TX_MTU: usize>(
+    pub async fn send<T: Controller, R: RngCore + CryptoRng, const TX_MTU: usize>(
         &mut self,
-        stack: &Stack<'_, T>,
+        stack: &Stack<'_, T, R>,
         buf: &[u8],
     ) -> Result<(), BleHostError<T::Error>> {
         let mut p_buf = [0u8; TX_MTU];
@@ -90,9 +91,9 @@ impl<'d> L2capChannel<'d> {
     ///
     /// If the channel has been closed or the channel id is not valid, an error is returned.
     /// If there are no available credits to send, returns Error::Busy.
-    pub fn try_send<T: Controller + blocking::Controller, const TX_MTU: usize>(
+    pub fn try_send<T: Controller + blocking::Controller, R: RngCore + CryptoRng, const TX_MTU: usize>(
         &mut self,
-        stack: &Stack<'_, T>,
+        stack: &Stack<'_, T, R>,
         buf: &[u8],
     ) -> Result<(), BleHostError<T::Error>> {
         let mut p_buf = [0u8; TX_MTU];
@@ -105,17 +106,17 @@ impl<'d> L2capChannel<'d> {
     /// Receive data on this channel and copy it into the buffer.
     ///
     /// The length provided buffer slice must be equal or greater to the agreed MTU.
-    pub async fn receive<T: Controller>(
+    pub async fn receive<T: Controller, R: RngCore + CryptoRng>(
         &mut self,
-        stack: &Stack<'_, T>,
+        stack: &Stack<'_, T, R>,
         buf: &mut [u8],
     ) -> Result<usize, BleHostError<T::Error>> {
         stack.host.channels.receive(self.index, buf, &stack.host).await
     }
 
     /// Await an incoming connection request matching the list of PSM.
-    pub async fn accept<T: Controller>(
-        stack: &'d Stack<'d, T>,
+    pub async fn accept<T: Controller, R: RngCore + CryptoRng>(
+        stack: &'d Stack<'d, T, R>,
         connection: &Connection<'_>,
         psm: &[u16],
         config: &L2capChannelConfig,
@@ -136,8 +137,8 @@ impl<'d> L2capChannel<'d> {
     }
 
     /// Create a new connection request with the provided PSM.
-    pub async fn create<T: Controller>(
-        stack: &'d Stack<'d, T>,
+    pub async fn create<T: Controller, R: RngCore + CryptoRng>(
+        stack: &'d Stack<'d, T, R>,
         connection: &Connection<'_>,
         psm: u16,
         config: &L2capChannelConfig,

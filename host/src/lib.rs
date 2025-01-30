@@ -23,6 +23,7 @@ use crate::connection_manager::{ConnectionStorage, EventChannel};
 use crate::l2cap::sar::SarType;
 use crate::packet_pool::PacketPool;
 use bt_hci::param::{AddrKind, BdAddr};
+use rand_core::{CryptoRng, RngCore};
 
 mod fmt;
 
@@ -365,6 +366,7 @@ impl<const CONNS: usize, const CHANNELS: usize, const L2CAP_MTU: usize, const AD
 pub fn new<
     'resources,
     C: Controller,
+    R: RngCore + CryptoRng,
     const CONNS: usize,
     const CHANNELS: usize,
     const L2CAP_MTU: usize,
@@ -372,7 +374,8 @@ pub fn new<
 >(
     controller: C,
     resources: &'resources mut HostResources<CONNS, CHANNELS, L2CAP_MTU, ADV_SETS>,
-) -> Stack<'resources, C> {
+    #[cfg(feature = "crypto")] rng: &'resources mut R,
+) -> Stack<'resources, C, R> {
     unsafe fn transmute_slice<T>(x: &mut [T]) -> &'static mut [T] {
         core::mem::transmute(x)
     }
@@ -412,7 +415,7 @@ pub fn new<
     let sar: &'static mut [Option<(ConnHandle, L2capHeader, AssembledPacket)>] = unsafe { transmute_slice(sar) };
     let advertise_handles = &mut *resources.advertise_handles.write([AdvHandleState::None; ADV_SETS]);
     let advertise_handles: &'static mut [AdvHandleState] = unsafe { transmute_slice(advertise_handles) };
-    let host: BleHost<'_, C> = BleHost::new(
+    let host: BleHost<'_, C, R> = BleHost::new(
         controller,
         rx_pool,
         #[cfg(feature = "gatt")]
@@ -423,30 +426,32 @@ pub fn new<
         channels_rx,
         sar,
         advertise_handles,
+        #[cfg(feature = "crypto")]
+        rng,
     );
 
     Stack { host }
 }
 
 /// Contains the host stack
-pub struct Stack<'stack, C> {
-    host: BleHost<'stack, C>,
+pub struct Stack<'stack, C, R> {
+    host: BleHost<'stack, C, R>,
 }
 
 /// Host components.
 #[non_exhaustive]
-pub struct Host<'stack, C> {
+pub struct Host<'stack, C, R> {
     /// Central role
     #[cfg(feature = "central")]
-    pub central: Central<'stack, C>,
+    pub central: Central<'stack, C, R>,
     /// Peripheral role
     #[cfg(feature = "peripheral")]
-    pub peripheral: Peripheral<'stack, C>,
+    pub peripheral: Peripheral<'stack, C, R>,
     /// Host runner
-    pub runner: Runner<'stack, C>,
+    pub runner: Runner<'stack, C, R>,
 }
 
-impl<'stack, C: Controller> Stack<'stack, C> {
+impl<'stack, C: Controller, R: RngCore + CryptoRng> Stack<'stack, C, R> {
     /// Set the random address used by this host.
     pub fn set_random_address(mut self, address: Address) -> Self {
         self.host.address.replace(address);
@@ -454,7 +459,7 @@ impl<'stack, C: Controller> Stack<'stack, C> {
     }
 
     /// Build the stack.
-    pub fn build(&'stack self) -> Host<'stack, C> {
+    pub fn build(&'stack self) -> Host<'stack, C, R> {
         Host {
             #[cfg(feature = "central")]
             central: Central::new(self),

@@ -1,6 +1,7 @@
 use tokio::select;
 use tokio::time::Duration;
 use trouble_host::prelude::*;
+use rand_core::SeedableRng;
 
 mod common;
 
@@ -13,6 +14,9 @@ const MTU: usize = 23;
 async fn l2cap_connection_oriented_channels() {
     let _ = env_logger::try_init();
     let adapters = common::find_controllers();
+    if adapters.len() == 0 {
+        return ();
+    }
     let peripheral = adapters[0].clone();
     let central = adapters[1].clone();
 
@@ -27,7 +31,13 @@ async fn l2cap_connection_oriented_channels() {
         let controller_peripheral = common::create_controller(&peripheral).await;
 
         let mut resources: HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 27> = HostResources::new();
-        let stack = trouble_host::new(controller_peripheral, &mut resources)
+        let mut rng = rand_chacha::ChaCha12Rng::from_seed(Default::default());
+        #[cfg(not(feature = "crypto"))]
+        let stack = trouble_host::new(controller_peripheral, &mut resources);
+        #[cfg(feature = "crypto")]
+        let stack = 
+            trouble_host::new(controller_peripheral, &mut resources, &mut rng);
+        let stack = stack
             .set_random_address(peripheral_address);
         let Host {
             mut peripheral,
@@ -74,10 +84,10 @@ async fn l2cap_connection_oriented_channels() {
                         assert_eq!(rx, [i; PAYLOAD_LEN]);
                     }
                     println!("[peripheral] data received");
-
+        
                     for i in 0..10 {
                         let tx = [i; PAYLOAD_LEN];
-                        ch1.send::<_, MTU>(&stack, &tx).await?;
+                        ch1.send::<_, _, MTU>(&stack, &tx).await?;
                     }
                     println!("[peripheral] data sent");
                     break;
@@ -94,7 +104,12 @@ async fn l2cap_connection_oriented_channels() {
         let controller_central = common::create_controller(&central).await;
         let mut resources: HostResources<CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 27> = HostResources::new();
 
+        let mut rng = rand_chacha::ChaCha12Rng::from_seed(Default::default());
+        #[cfg(not(feature = "crypto"))]
         let stack = trouble_host::new(controller_central, &mut resources);
+        #[cfg(feature = "crypto")]
+        let stack = 
+            trouble_host::new(controller_central, &mut resources, &mut rng);
         let Host {
             mut central,
             mut runner,
@@ -123,7 +138,7 @@ async fn l2cap_connection_oriented_channels() {
                     println!("[central] channel created");
                     for i in 0..10 {
                         let tx = [i; PAYLOAD_LEN];
-                        ch1.send::<_, MTU>(&stack, &tx).await?;
+                        ch1.send::<_, _, MTU>(&stack, &tx).await?;
                     }
                     println!("[central] data sent");
                     let mut rx = [0; PAYLOAD_LEN];

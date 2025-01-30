@@ -32,6 +32,7 @@ use embassy_sync::waitqueue::WakerRegistration;
 #[cfg(feature = "gatt")]
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
 use futures::pin_mut;
+use rand_core::{CryptoRng, RngCore};
 
 use crate::channel_manager::{ChannelManager, ChannelStorage, PacketChannel};
 use crate::command::CommandState;
@@ -42,8 +43,10 @@ use crate::cursor::WriteCursor;
 use crate::l2cap::sar::{PacketReassembly, SarType};
 use crate::packet_pool::Pool;
 use crate::pdu::Pdu;
+use crate::security_manager::SecurityManager;
 use crate::types::l2cap::{
-    L2capHeader, L2capSignal, L2capSignalHeader, L2CAP_CID_ATT, L2CAP_CID_DYN_START, L2CAP_CID_LE_U_SIGNAL,
+    L2capHeader, L2capSignal, L2capSignalHeader, L2CAP_CID_ATT, L2CAP_CID_DYN_START, L2CAP_CID_LE_U_SECURITY_MANAGER,
+    L2CAP_CID_LE_U_SIGNAL,
 };
 use crate::{att, config, Address, BleHostError, Error, Stack};
 
@@ -54,7 +57,7 @@ use crate::{att, config, Address, BleHostError, Error, Stack};
 ///
 /// The host performs connection management, l2cap channel management, and
 /// multiplexes events and data across connections and l2cap channels.
-pub(crate) struct BleHost<'d, T> {
+pub(crate) struct BleHost<'d, T, R> {
     initialized: OnceLock<InitialState>,
     metrics: RefCell<HostMetrics>,
     pub(crate) address: Option<Address>,
@@ -67,7 +70,8 @@ pub(crate) struct BleHost<'d, T> {
     pub(crate) rx_pool: &'d dyn Pool,
     #[cfg(feature = "gatt")]
     pub(crate) tx_pool: &'d dyn Pool,
-
+    #[cfg(feature = "crypto")]
+    pub(crate) security_manager: SecurityManager<'d, R>,
     pub(crate) advertise_state: AdvState<'d>,
     pub(crate) advertise_command_state: CommandState<bool>,
     pub(crate) connect_command_state: CommandState<bool>,
@@ -183,9 +187,10 @@ pub struct HostMetrics {
     pub rx_errors: u32,
 }
 
-impl<'d, T> BleHost<'d, T>
+impl<'d, T, R> BleHost<'d, T, R>
 where
     T: Controller,
+    R: RngCore + CryptoRng,
 {
     /// Create a new instance of the BLE host.
     ///
@@ -202,6 +207,7 @@ where
         channels_rx: &'d mut [PacketChannel<{ config::L2CAP_RX_QUEUE_SIZE }>],
         sar: &'d mut [SarType],
         advertise_handles: &'d mut [AdvHandleState],
+        #[cfg(feature = "crypto")] rng: &'d mut R,
     ) -> Self {
         Self {
             address: None,
@@ -223,6 +229,8 @@ where
             advertise_command_state: CommandState::new(),
             scan_command_state: CommandState::new(),
             connect_command_state: CommandState::new(),
+            #[cfg(feature = "crypto")]
+            security_manager: SecurityManager::new(rng),
         }
     }
 
@@ -302,7 +310,8 @@ where
 
                 // Ignore channels we don't support
                 if header.channel < L2CAP_CID_DYN_START
-                    && !(&[L2CAP_CID_LE_U_SIGNAL, L2CAP_CID_ATT].contains(&header.channel))
+                    && !(&[L2CAP_CID_LE_U_SIGNAL, L2CAP_CID_ATT, L2CAP_CID_LE_U_SECURITY_MANAGER]
+                        .contains(&header.channel))
                 {
                     warn!("[host] unsupported l2cap channel id {}", header.channel);
                     return Err(Error::NotSupported);
@@ -312,6 +321,7 @@ where
                 if header.channel == L2CAP_CID_LE_U_SIGNAL {
                     assert!(data.len() == header.length as usize);
                     self.channels.signal(acl.handle(), data)?;
+                    info!("[host] Handle ACL LE-U Signal");
                     return Ok(());
                 }
 
@@ -371,12 +381,14 @@ where
                     #[cfg(feature = "gatt")]
                     match a {
                         Ok(att::Att::Req(_)) => {
+                            info!("[host] Handle general attribute request");
                             let event = ConnectionEventData::Gatt {
                                 data: Pdu::new(packet, header.length as usize),
                             };
                             self.connections.post_handle_event(acl.handle(), event)?;
                         }
                         Ok(att::Att::Rsp(_)) => {
+                            info!("[host] Handle general attribute response");
                             if let Err(e) = self
                                 .att_client
                                 .try_send((acl.handle(), Pdu::new(packet, header.length as usize)))
@@ -394,6 +406,11 @@ where
             }
             L2CAP_CID_LE_U_SIGNAL => {
                 panic!("le signalling channel was fragmented, impossible!");
+            }
+            L2CAP_CID_LE_U_SECURITY_MANAGER => {
+                let payload = packet.as_ref();
+                self.security_manager.handle(0, payload)?;
+                // self.connections.try_outbound(acl.handle(), Pdu::new(packet, len))?;
             }
             other if other >= L2CAP_CID_DYN_START => match self.channels.dispatch(header, packet) {
                 Ok(_) => {}
@@ -457,25 +474,25 @@ where
 }
 
 /// Runs the host with the given controller.
-pub struct Runner<'d, C> {
-    rx: RxRunner<'d, C>,
-    control: ControlRunner<'d, C>,
-    tx: TxRunner<'d, C>,
+pub struct Runner<'d, C, R> {
+    rx: RxRunner<'d, C, R>,
+    control: ControlRunner<'d, C, R>,
+    tx: TxRunner<'d, C, R>,
 }
 
 /// The receiver part of the host runner.
-pub struct RxRunner<'d, C> {
-    stack: &'d Stack<'d, C>,
+pub struct RxRunner<'d, C, R> {
+    stack: &'d Stack<'d, C, R>,
 }
 
 /// The control part of the host runner.
-pub struct ControlRunner<'d, C> {
-    stack: &'d Stack<'d, C>,
+pub struct ControlRunner<'d, C, R> {
+    stack: &'d Stack<'d, C, R>,
 }
 
 /// The transmit part of the host runner.
-pub struct TxRunner<'d, C> {
-    stack: &'d Stack<'d, C>,
+pub struct TxRunner<'d, C, R> {
+    stack: &'d Stack<'d, C, R>,
 }
 
 /// Event handler.
@@ -493,8 +510,8 @@ pub trait EventHandler {
 struct DummyHandler;
 impl EventHandler for DummyHandler {}
 
-impl<'d, C: Controller> Runner<'d, C> {
-    pub(crate) fn new(stack: &'d Stack<'d, C>) -> Self {
+impl<'d, C: Controller, R: RngCore + CryptoRng> Runner<'d, C, R> {
+    pub(crate) fn new(stack: &'d Stack<'d, C, R>) -> Self {
         Self {
             rx: RxRunner { stack },
             control: ControlRunner { stack },
@@ -503,7 +520,7 @@ impl<'d, C: Controller> Runner<'d, C> {
     }
 
     /// Split the runner into separate independent async tasks
-    pub fn split(self) -> (RxRunner<'d, C>, ControlRunner<'d, C>, TxRunner<'d, C>) {
+    pub fn split(self) -> (RxRunner<'d, C, R>, ControlRunner<'d, C, R>, TxRunner<'d, C, R>) {
         (self.rx, self.control, self.tx)
     }
 
@@ -572,7 +589,7 @@ impl<'d, C: Controller> Runner<'d, C> {
     }
 }
 
-impl<'d, C: Controller> RxRunner<'d, C> {
+impl<'d, C: Controller, R: RngCore + CryptoRng> RxRunner<'d, C, R> {
     /// Run the receive loop that polls the controller for events.
     pub async fn run(&mut self) -> Result<(), BleHostError<C::Error>>
     where
@@ -755,7 +772,7 @@ impl<'d, C: Controller> RxRunner<'d, C> {
     }
 }
 
-impl<'d, C: Controller> ControlRunner<'d, C> {
+impl<'d, C: Controller, R: RngCore + CryptoRng> ControlRunner<'d, C, R> {
     /// Run the control loop for the host
     pub async fn run(&mut self) -> Result<(), BleHostError<C::Error>>
     where
@@ -908,7 +925,7 @@ impl<'d, C: Controller> ControlRunner<'d, C> {
     }
 }
 
-impl<'d, C: Controller> TxRunner<'d, C> {
+impl<'d, C: Controller, R: RngCore + CryptoRng> TxRunner<'d, C, R> {
     /// Run the transmit loop for the host.
     pub async fn run(&mut self) -> Result<(), BleHostError<C::Error>> {
         let host = &self.stack.host;

@@ -10,6 +10,7 @@ use bt_hci::controller::{Controller, ControllerCmdSync};
 use bt_hci::param::{AddrKind, FilterDuplicates, ScanningPhy};
 pub use bt_hci::param::{LeAdvReportsIter, LeExtAdvReportsIter};
 use embassy_time::Instant;
+use rand_core::{CryptoRng, RngCore};
 
 use crate::Central;
 
@@ -18,18 +19,18 @@ use crate::Central;
 ///
 /// The buffer size can be tuned if in a noisy environment that
 /// returns a lot of results.
-pub struct Scanner<'d, C: Controller> {
-    central: Central<'d, C>,
+pub struct Scanner<'d, C: Controller, R: RngCore + CryptoRng> {
+    central: Central<'d, C, R>,
 }
 
-impl<'d, C: Controller> Scanner<'d, C> {
+impl<'d, C: Controller, R: RngCore + CryptoRng> Scanner<'d, C, R> {
     /// Create a new scanner with the provided central.
-    pub fn new(central: Central<'d, C>) -> Self {
+    pub fn new(central: Central<'d, C, R>) -> Self {
         Self { central }
     }
 
     /// Retrieve the underlying central
-    pub fn into_inner(self) -> Central<'d, C> {
+    pub fn into_inner(self) -> Central<'d, C, R> {
         self.central
     }
 

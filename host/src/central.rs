@@ -7,14 +7,15 @@ use bt_hci::param::{AddrKind, BdAddr, InitiatingPhy, LeConnRole, PhyParams};
 #[cfg(feature = "controller-host-flow-control")]
 use bt_hci::param::{ConnHandleCompletedPackets, ControllerToHostFlowControl};
 use embassy_futures::select::{select, Either};
+use rand_core::{CryptoRng, RngCore};
 
 /// A type implementing the BLE central role.
-pub struct Central<'stack, C> {
-    pub(crate) stack: &'stack Stack<'stack, C>,
+pub struct Central<'stack, C, R> {
+    pub(crate) stack: &'stack Stack<'stack, C, R>,
 }
 
-impl<'stack, C: Controller> Central<'stack, C> {
-    pub(crate) fn new(stack: &'stack Stack<'stack, C>) -> Self {
+impl<'stack, C: Controller, R: RngCore + CryptoRng> Central<'stack, C, R> {
+    pub(crate) fn new(stack: &'stack Stack<'stack, C, R>) -> Self {
         Self { stack }
     }
 
